@@ -164,7 +164,11 @@ export default function DCFCalculator() {
       riskFreeRate: ["risk free rate", "risksiz faiz oranı"].map(normalize),
       debtRate: ["debt interest rate", "debt rate", "borç faiz oranı", "interest rate on debt"].map(normalize),
       terminalGrowth: ["terminal growth rate", "terminal büyüme oranı"].map(normalize),
+      interestExpense: ["interest expense", "faiz gideri"].map(normalize),
     };
+
+    let capturedInterestExpense: number | null = null;
+    let capturedTotalDebt: number | null = null;
 
     const setMetric = (metric: string, value: string) => {
       value = value.replace(/[%‰‱,]/g,"")
@@ -174,7 +178,10 @@ export default function DCFCalculator() {
       switch(metric) {
         case "fcf": setFcf(value); break;
         case "sharesOutstanding": setSharesOutstanding(value); break;
-        case "debt": setDebt(value); break;
+        case "debt": 
+          setDebt(value); 
+          capturedTotalDebt = parseFloat(value);
+          break;
         case "equity": setEquity(value); break;
         case "cash": setCash(value); break;
         case "taxRate": setTaxRate(value); break;
@@ -183,6 +190,9 @@ export default function DCFCalculator() {
         case "riskFreeRate": setRiskFreeRate(value); break;
         case "debtRate": setDebtRate(value); break;
         case "terminalGrowth": setTerminalGrowth(value); break;
+        case "interestExpense":
+          capturedInterestExpense = Math.abs(parseFloat(value));
+          break;
         default:
       }
     };
@@ -264,6 +274,14 @@ export default function DCFCalculator() {
               if (taxValue) {
                 setTaxRate(taxValue);
               }
+            } else if (metric === "sharesOutstanding") {
+              // Always use the first (TTM) value for shares outstanding
+              let firstValue = value.split(/\s+/)[0].replace(/[,]/g, "").trim();
+              setMetric(metric, firstValue);
+            } else if (metric === "interestExpense") {
+              // Get the first (TTM) value for interest expense
+              let firstValue = value.split(/\s+/)[0].replace(/[,]/g, "").trim();
+              setMetric(metric, firstValue);
             } else {
               setMetric(metric, value);
             }
@@ -297,6 +315,10 @@ export default function DCFCalculator() {
           if (taxValue) {
             setTaxRate(taxValue);
           }
+        } else if (currentMetric === "sharesOutstanding" || currentMetric === "interestExpense") {
+          // Always use the first (TTM) value
+          let num = trimmed.replace(/[%‰,\$]/g, "").trim().split(/\s+/)[0];
+          setMetric(currentMetric, num);
         } else {
           let num = trimmed.replace(/[%‰,\$]/g, "").trim().split(/\s+/)[0];
           setMetric(currentMetric, num);
@@ -342,7 +364,6 @@ export default function DCFCalculator() {
     let defaultRF = "4.5";
     let defaultERP = "5.5";
     let foundRiskFreeRate = null;
-    let foundDebtRate: {interest?: number; debt?: number} = {};
     
     for (let i = 0; i < lines.length; i++) {
       let l = lines[i];
@@ -353,26 +374,14 @@ export default function DCFCalculator() {
             foundRiskFreeRate = vals[0].replace(/,/g,'');
           }
         }
-        if (/interest expense/i.test(l)) {
-          let nums = l.split(/\s+/).concat((lines[i+1]||'').split(/\s+/));
-          let n = nums.map(x => parseFloat(x.replace(/,/g,''))).find(x=>!isNaN(x));
-          if(typeof n === 'number' && n !== 0) foundDebtRate = {interest:n};
-        }
-        if (/total debt/i.test(l)) {
-          let nums = l.split(/\s+/).concat((lines[i+1]||'').split(/\s+/));
-          let n = nums.map(x => parseFloat(x.replace(/,/g,''))).find(x=>!isNaN(x));
-          if(typeof n === 'number' && n !== 0) {
-            if(!foundDebtRate) foundDebtRate = {};
-            foundDebtRate.debt = n;
-          }
-        }
       } catch(e) {}
     }
     if(foundRiskFreeRate) setRiskFreeRate(foundRiskFreeRate);
     else setRiskFreeRate(defaultRF);
 
-    if(foundDebtRate.interest !== undefined && foundDebtRate.debt !== undefined) {
-      setDebtRate(((Math.abs(foundDebtRate.interest)/foundDebtRate.debt)*100).toFixed(2));
+    // Calculate debt rate from captured interest expense and total debt
+    if(capturedInterestExpense !== null && capturedTotalDebt !== null && capturedTotalDebt !== 0) {
+      setDebtRate(((capturedInterestExpense / capturedTotalDebt) * 100).toFixed(2));
     } else {
       setDebtRate("");
     }
