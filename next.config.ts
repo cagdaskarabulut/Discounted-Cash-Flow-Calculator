@@ -6,6 +6,7 @@ const nextConfig: NextConfig = {
       allowedOrigins: ["*"],
     },
   },
+  allowedDevOrigins: ["*"],
 };
 
 export default nextConfig;

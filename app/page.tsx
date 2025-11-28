@@ -21,7 +21,10 @@ export default function DCFCalculator() {
   const [dcfResult, setDcfResult] = useState<number | null>(null);
   const [breakdown, setBreakdown] = useState<any>(null);
   const [showPopup, setShowPopup] = useState(false);
+  const [showUrlPopup, setShowUrlPopup] = useState(false);
   const [importText, setImportText] = useState("");
+  const [importUrl, setImportUrl] = useState("");
+  const [urlLoading, setUrlLoading] = useState(false);
   const [infoPopup, setInfoPopup] = useState<{title: string, desc: string, keyword: string, url: string, urlLabel?: string} | null>(null);
 
   const calculateWACC = () => {
@@ -82,20 +85,17 @@ export default function DCFCalculator() {
     const equityValue = enterpriseValue - netDebt;
     const dcf = equityValue / sharesNum;
   
-    // DOĞRU HESAPLAMA: Projeksiyon yılını artırarak kaç yılda mevcut fiyata ulaşır?
     let yearsToReachCurrentPrice = null;
     const marketPrice = parseFloat(currentMarketPrice);
   
     if (marketPrice && marketPrice > 0 && dcf < marketPrice) {
-      // İteratif olarak DCF hesabını yaparak kaç yılda market price'ı geçtiğini bul
       let testYear = years;
       let testDcf = dcf;
-      const maxYears = 50; // Maksimum test yılı (sonsuz döngü önlemi)
+      const maxYears = 50;
       
       while (testDcf < marketPrice && testYear < maxYears) {
         testYear++;
         
-        // Her test yılı için DCF'yi yeniden hesapla
         let testPvOfProjectedFCFs = 0;
         for (let i = 1; i <= testYear; i++) {
           const projectedFCF = fcfNum * Math.pow(1 + growthRate, i);
@@ -115,7 +115,6 @@ export default function DCFCalculator() {
       if (testYear < maxYears) {
         yearsToReachCurrentPrice = testYear;
       } else {
-        // 50 yıl içinde ulaşılamazsa null bırak
         yearsToReachCurrentPrice = null;
       }
     }
@@ -135,18 +134,17 @@ export default function DCFCalculator() {
     });
   }
 
-  const handleImport = () => {
-    const lines = importText.split("\n");
+  const processImportData = (text: string) => {
+    const lines = text.split("\n");
     let currentMetric: string | null = null;
     setProjectionYears("5");
-    // Normalize helper: başlıkları küçük harf, işaretsiz, çoklu boşlukları teke indir
+    
     const normalize = (s: string) => s.toLowerCase()
-      .replace(/&/g, ' and ')        // & yerine and yaz
-      .replace(/[^a-zA-ZğüşöçıİĞÜŞÖÇ0-9\s']/g, '') // özel karakterleri at
-      .replace(/\s+/g, ' ')         // çoklu boşlukları teke indir
+      .replace(/&/g, ' and ')
+      .replace(/[^a-zA-ZğüşöçıİĞÜŞÖÇ0-9\s']/g, '')
+      .replace(/\s+/g, ' ')
       .trim();
 
-    // Eşleştirmede kullanılacak başlıklar ve olası alternatifleri
     const metricMap: { [key: string]: string[] } = {
       fcf: ["free cash flow", "fcf", "serbest nakit akışı"].map(normalize),
       sharesOutstanding: ["total common shares outstanding", "shares outstanding (diluted)", "shares outstanding", "hisse sayısı"].map(normalize),
@@ -169,11 +167,10 @@ export default function DCFCalculator() {
     };
 
     const setMetric = (metric: string, value: string) => {
-      value = value.replace(/[%‰‱,]/g,"") // yüzde, permil işaretleri ve virgülleri ayıkla
-                 .replace(/\s/g,"")        // boşlukları ayıkla
-                 .replace(/\(.*\)/,"")     // parantez içinde bilgi varsa kaldır
-                 .replace(/\$/g, "")        // $ işareti varsa kaldır
-                 ;
+      value = value.replace(/[%‰‱,]/g,"")
+                 .replace(/\s/g,"")
+                 .replace(/\(.*\)/,"")
+                 .replace(/\$/g, "");
       switch(metric) {
         case "fcf": setFcf(value); break;
         case "sharesOutstanding": setSharesOutstanding(value); break;
@@ -190,6 +187,53 @@ export default function DCFCalculator() {
       }
     };
 
+    const processFcfData = (fcfArr: number[]) => {
+      if (fcfArr.length > 0) {
+        setFcf(fcfArr[0].toString());
+      }
+
+      if (fcfArr.length >= 2) {
+        const oneYearGrowth = fcfArr[1] !== 0 ? ((fcfArr[0] - fcfArr[1]) / Math.abs(fcfArr[1])) * 100 : 0;
+        let finalGrowth = oneYearGrowth;
+        
+        if (fcfArr.length >= 3) {
+          const growths = [];
+          for (let i = 0; i < Math.min(2, fcfArr.length - 1); i++) {
+            if (fcfArr[i + 1] !== 0) {
+              const growth = ((fcfArr[i] - fcfArr[i + 1]) / Math.abs(fcfArr[i + 1])) * 100;
+              growths.push(growth);
+            }
+          }
+          
+          if (growths.length > 0) {
+            const avgGrowth = growths.reduce((sum, g) => sum + g, 0) / growths.length;
+            const maxGrowth = Math.max(...growths);
+            const minGrowth = Math.min(...growths);
+            const growthSpread = maxGrowth - minGrowth;
+            
+            if (avgGrowth < 0 || avgGrowth < -50) {
+              finalGrowth = oneYearGrowth;
+            } else if (growthSpread > 80) {
+              finalGrowth = oneYearGrowth;
+            } else if (avgGrowth > 50) {
+              finalGrowth = oneYearGrowth;
+            } else {
+              finalGrowth = avgGrowth;
+            }
+          }
+        }
+
+        let safeGrowth = finalGrowth;
+        if (finalGrowth > 40) {
+          safeGrowth = 40;
+        } else if (finalGrowth < 0) {
+          safeGrowth = oneYearGrowth;
+        }
+        
+        setFcfGrowthRate(safeGrowth.toFixed(2));
+      }
+    };
+
     lines.forEach(line => {
       const trimmed = line.trim();
       if (!trimmed || trimmed.toLowerCase() === "upgrade") return;
@@ -198,90 +242,20 @@ export default function DCFCalculator() {
       if (split.length >= 2) {
         let key = normalize(split[0]);
         let value = split.slice(1).join(' ').trim();
-        // Free Cash Flow satırı ise hem fcf hem büyüme oranını yaz
+        
         if (metricMap.fcf.includes(key)) {
-          // FCF'yi atayınca ilk değeri state'e koy
-          /*const fcfArr = value.split(/\s+/).map(v => parseFloat(v.replace(/[,]/g, ''))).filter(x => !isNaN(x));
-          if (fcfArr.length > 0) setFcf(fcfArr[0].toString());
-          if (fcfArr.length > 1 && fcfArr[1] !== 0) {
-            const growth = ((fcfArr[0] - fcfArr[1]) / Math.abs(fcfArr[1])) * 100 ;//0,8 ile çarparak bulunan katsayıyı %20 düşürerek kötümser senaryoda ne olacağını bulduk.
-            console.log(growth);
-            setFcfGrowthRate(growth.toFixed(2));
-          }
-          return;*/
           const fcfArr = value.split(/\s+/).map(v => parseFloat(v.replace(/[,]/g, ''))).filter(x => !isNaN(x) && x !== 0);
-          
-          if (fcfArr.length > 0) {
-            setFcf(fcfArr[0].toString()); // En güncel FCF'yi ayarla
-          }
-
-          if (fcfArr.length >= 2) {
-            // 1 yıllık büyüme oranını hesapla (her zaman kullanılabilir)
-            const oneYearGrowth = fcfArr[1] !== 0 ? ((fcfArr[0] - fcfArr[1]) / Math.abs(fcfArr[1])) * 100 : 0;
-
-            // Son 2 yılın büyüme oranlarını hesapla ve analiz et
-            let finalGrowth = oneYearGrowth; // Varsayılan: 1 yıllık büyüme
-            if (fcfArr.length >= 3) {
-              const growths = [];
-              for (let i = 0; i < Math.min(2, fcfArr.length - 1); i++) {
-                if (fcfArr[i + 1] !== 0) {
-                  const growth = ((fcfArr[i] - fcfArr[i + 1]) / Math.abs(fcfArr[i + 1])) * 100;
-                  growths.push(growth);
-                }
-              }
-              
-              if (growths.length > 0) {
-                const avgGrowth = growths.reduce((sum, g) => sum + g, 0) / growths.length;
-                const maxGrowth = Math.max(...growths);
-                const minGrowth = Math.min(...growths);
-                const growthSpread = maxGrowth - minGrowth; // Büyüme oranları arasındaki fark
-                
-                // Eğer ortalama negatifse veya çok düşükse, 1 yıllık büyüme kullan
-                if (avgGrowth < 0 || avgGrowth < -50) {
-                  finalGrowth = oneYearGrowth;
-                  console.log(`Ortalama büyüme negatif (${avgGrowth.toFixed(2)}%), 1 yıllık büyüme kullanıldı: ${oneYearGrowth.toFixed(2)}%`);
-                }
-                // Eğer büyüme oranları arasında çok büyük fark varsa (ör: %27 vs %125), sadece son 1 yılı kullan
-                else if (growthSpread > 80) {
-                  finalGrowth = oneYearGrowth;
-                  console.log(`Büyüme oranları çok değişken (fark: ${growthSpread.toFixed(2)}%), sadece son 1 yıl kullanıldı: ${oneYearGrowth.toFixed(2)}%`);
-                }
-                // Eğer ortalama çok yüksekse (ör: %76), konservatif olmak için sadece son 1 yılı kullan
-                else if (avgGrowth > 50) {
-                  finalGrowth = oneYearGrowth;
-                  console.log(`Ortalama büyüme çok yüksek (${avgGrowth.toFixed(2)}%), konservatif yaklaşım: son 1 yıl kullanıldı: ${oneYearGrowth.toFixed(2)}%`);
-                }
-                // Aksi halde ortalamayı kullan
-                else {
-                  finalGrowth = avgGrowth;
-                  console.log(`Son 2 yılın ortalama büyüme oranı kullanıldı: ${avgGrowth.toFixed(2)}%`);
-                }
-              }
-            }
-
-            // Final büyüme oranını sınırla: 40'tan büyükse 40'a, negatifse 1 yıllık büyümeyi kullan
-            let safeGrowth = finalGrowth;
-            if (finalGrowth > 40) {
-              safeGrowth = 40;
-              console.log(`Büyüme oranı %40'a sınırlandı: ${finalGrowth.toFixed(2)}% → 40.00%`);
-            } else if (finalGrowth < 0) {
-              safeGrowth = oneYearGrowth;
-              console.log(`Büyüme oranı negatif, 1 yıllık büyüme kullanıldı: ${oneYearGrowth.toFixed(2)}%`);
-            }
-            
-            setFcfGrowthRate(safeGrowth.toFixed(2));
-          }
-          return;
-        }
+          processFcfData(fcfArr);
+          return;
+        }
+        
         for (const [metric, aliases] of Object.entries(metricMap)) {
           if (aliases.some(alias => key === alias)) {
-            // Effective Tax Rate için özel kontrol: İlk değer "-" ise bir sonraki dolu değeri bul
             if (metric === "taxRate") {
               let values = value.split(/\s+/);
               let taxValue = null;
               for (let val of values) {
                 let cleaned = val.replace(/[%‰,\$]/g, "").trim();
-                // "-" veya boş değilse ve sayısal ise
                 if (cleaned && cleaned !== "-" && !isNaN(parseFloat(cleaned))) {
                   taxValue = cleaned;
                   break;
@@ -298,7 +272,6 @@ export default function DCFCalculator() {
         }
       }
 
-      // Eski mantıkla başlık satırı arama
       let lc = normalize(trimmed);
       for(const [metric, aliases] of Object.entries(metricMap)) {
         if(aliases.includes(lc)) {
@@ -307,83 +280,15 @@ export default function DCFCalculator() {
         }
       }
 
-      // Sadece sayısal veri içeren satır yakala (ör: başlık satırından sonra gelen değer satırı)
       if (currentMetric) {
         if (currentMetric === "fcf") {
-          /*let fcfArr = trimmed.split(/\s+/).map(v => parseFloat(v.replace(/[,]/g, ''))).filter(x => !isNaN(x));
-          if (fcfArr.length > 0) setFcf(fcfArr[0].toString());
-          if (fcfArr.length > 1 && fcfArr[1] !== 0) {
-            const growth = ((fcfArr[0] - fcfArr[1]) / Math.abs(fcfArr[1])) * 100;
-            setFcfGrowthRate(growth.toFixed(2));
-          }*/
-            let fcfArr = trimmed.split(/\s+/).map(v => parseFloat(v.replace(/[,]/g, ''))).filter(x => !isNaN(x));          
-              if (fcfArr.length > 0) {
-                setFcf(fcfArr[0].toString()); // En güncel FCF'yi ayarla
-              }
-    
-              if (fcfArr.length >= 2) {
-                // 1 yıllık büyüme oranını hesapla (her zaman kullanılabilir)
-                const oneYearGrowth = fcfArr[1] !== 0 ? ((fcfArr[0] - fcfArr[1]) / Math.abs(fcfArr[1])) * 100 : 0;
-
-                // Son 2 yılın büyüme oranlarını hesapla ve analiz et
-                let finalGrowth = oneYearGrowth; // Varsayılan: 1 yıllık büyüme
-                if (fcfArr.length >= 3) {
-                  const growths = [];
-                  for (let i = 0; i < Math.min(2, fcfArr.length - 1); i++) {
-                    if (fcfArr[i + 1] !== 0) {
-                      const growth = ((fcfArr[i] - fcfArr[i + 1]) / Math.abs(fcfArr[i + 1])) * 100;
-                      growths.push(growth);
-                    }
-                  }
-                  
-                  if (growths.length > 0) {
-                    const avgGrowth = growths.reduce((sum, g) => sum + g, 0) / growths.length;
-                    const maxGrowth = Math.max(...growths);
-                    const minGrowth = Math.min(...growths);
-                    const growthSpread = maxGrowth - minGrowth; // Büyüme oranları arasındaki fark
-                    
-                    // Eğer ortalama negatifse veya çok düşükse, 1 yıllık büyüme kullan
-                    if (avgGrowth < 0 || avgGrowth < -50) {
-                      finalGrowth = oneYearGrowth;
-                      console.log(`Ortalama büyüme negatif (${avgGrowth.toFixed(2)}%), 1 yıllık büyüme kullanıldı: ${oneYearGrowth.toFixed(2)}%`);
-                    }
-                    // Eğer büyüme oranları arasında çok büyük fark varsa (ör: %27 vs %125), sadece son 1 yılı kullan
-                    else if (growthSpread > 80) {
-                      finalGrowth = oneYearGrowth;
-                      console.log(`Büyüme oranları çok değişken (fark: ${growthSpread.toFixed(2)}%), sadece son 1 yıl kullanıldı: ${oneYearGrowth.toFixed(2)}%`);
-                    }
-                    // Eğer ortalama çok yüksekse (ör: %76), konservatif olmak için sadece son 1 yılı kullan
-                    else if (avgGrowth > 50) {
-                      finalGrowth = oneYearGrowth;
-                      console.log(`Ortalama büyüme çok yüksek (${avgGrowth.toFixed(2)}%), konservatif yaklaşım: son 1 yıl kullanıldı: ${oneYearGrowth.toFixed(2)}%`);
-                    }
-                    // Aksi halde ortalamayı kullan
-                    else {
-                      finalGrowth = avgGrowth;
-                      console.log(`Son 2 yılın ortalama büyüme oranı kullanıldı: ${avgGrowth.toFixed(2)}%`);
-                    }
-                  }
-                }
-
-                // Final büyüme oranını sınırla: 40'tan büyükse 40'a, negatifse 1 yıllık büyümeyi kullan
-                let safeGrowth = finalGrowth;
-                if (finalGrowth > 40) {
-                  safeGrowth = 40;
-                  console.log(`Büyüme oranı %40'a sınırlandı: ${finalGrowth.toFixed(2)}% → 40.00%`);
-                } else if (finalGrowth < 0) {
-                  safeGrowth = oneYearGrowth;
-                  console.log(`Büyüme oranı negatif, 1 yıllık büyüme kullanıldı: ${oneYearGrowth.toFixed(2)}%`);
-                }
-                
-                setFcfGrowthRate(safeGrowth.toFixed(2));
-              }
+          let fcfArr = trimmed.split(/\s+/).map(v => parseFloat(v.replace(/[,]/g, ''))).filter(x => !isNaN(x));
+          processFcfData(fcfArr);
         } else if (currentMetric === "taxRate") {
-          // Effective Tax Rate için: İlk değer "-" ise bir sonraki dolu değeri bul
           let values = trimmed.split(/\s+/);
           let taxValue = null;
           for (let val of values) {
             let cleaned = val.replace(/[%‰,\$]/g, "").trim();
-            // "-" veya boş değilse ve sayısal ise
             if (cleaned && cleaned !== "-" && !isNaN(parseFloat(cleaned))) {
               taxValue = cleaned;
               break;
@@ -398,19 +303,12 @@ export default function DCFCalculator() {
         }
         currentMetric = null;
       }
-
     });
 
-    // handleImport fonksiyonu içinde, aşağıdaki kod parçalarını lines.forEach'in altına ekle (tüm satırlar parse edildikten sonra, ilgili hesaplara bakılır)
-
-    // --- Terminal Büyüme Oranı otomatik doldur ---
-    // Eğer veri arasında 'Terminal Growth Rate' satırı veya varyasyonu varsa onu kullan,
-    // yoksa son birkaç yılın FCF büyümesinin ortalamasını al, başka türlü ABD için 2.5 bırak.
     let foundTerminalGrowth = false;
     for (let l of lines) {
       if (/terminal growth rate/i.test(l)) {
         foundTerminalGrowth = true;
-        // Satır başlığı veya altındaki sayı satırı olarak çöz
         let idx = lines.indexOf(l);
         let numLine = lines[idx+1] || l;
         let vals = numLine.match(/[-+]?\d+[\d,\.\s]*/g);
@@ -421,53 +319,45 @@ export default function DCFCalculator() {
       }
     }
     if (!foundTerminalGrowth) {
-      // Free Cash Flow satırındaki büyüme ortalamasını bul
       let fcfLines = lines.filter(l => /free cash flow/i.test(l));
       if(fcfLines.length) {
         let idx = lines.indexOf(fcfLines[0]);
         let valLine = lines[idx+1] || '';
         let arr = valLine.split(/\s+/).map(v=>parseFloat(v.replace(/,/,''))).filter(v=>!isNaN(v));
         if (arr.length >= 3) {
-          // Sadece son 3 yılın büyümesini al (daha stabil)
           let recentGrowths = [];
           for (let i = 0; i < Math.min(3, arr.length - 1); i++) {
             const growth = (arr[i] - arr[i + 1]) / Math.abs(arr[i + 1]) * 100;
             recentGrowths.push(growth);
           }
           let avgRecent = recentGrowths.reduce((a, b) => a + b, 0) / recentGrowths.length;
-        
-          // Terminal büyüme için mantıklı aralık: 0% - 8%
-          let suggestedTerminal = Math.max(0, Math.min(4, avgRecent)); // 0-8% arası sıkıştır
+          let suggestedTerminal = Math.max(0, Math.min(4, avgRecent));
           setTerminalGrowth(suggestedTerminal.toFixed(2));
         } else {
-          setTerminalGrowth("3.0"); // default güvenli değer
+          setTerminalGrowth("3.0");
         }
       }
     }
 
-    // Varsayılanlar ve sayısal tanımlayıcılar
     let defaultRF = "4.5";
     let defaultERP = "5.5";
-    let foundRiskFreeRate = null, foundEquityRP = null, foundDebtRate: {interest?: number; debt?: number} = {};
-    // Faiz Oranı: Önce Risk Free Rate, 'Risk Free Rate' veya '10-Year Treasury yield' bul
+    let foundRiskFreeRate = null;
+    let foundDebtRate: {interest?: number; debt?: number} = {};
+    
     for (let i = 0; i < lines.length; i++) {
       let l = lines[i];
       try {
-        // Risksiz Faiz Oranı
         if (/risk[\s-]?free[\s-]?rate|10[- ]?year.*treasury.*yield/i.test(l)) {
-          // Aynı satır veya alt satırda sayı bul
           let vals = l.match(/\d+[\d,\.]*/) || (lines[i+1]||'').match(/\d+[\d,\.]*/);
           if(vals && vals[0]) {
             foundRiskFreeRate = vals[0].replace(/,/g,'');
           }
         }
-        // Interest Expense
         if (/interest expense/i.test(l)) {
           let nums = l.split(/\s+/).concat((lines[i+1]||'').split(/\s+/));
           let n = nums.map(x => parseFloat(x.replace(/,/g,''))).find(x=>!isNaN(x));
           if(typeof n === 'number' && n !== 0) foundDebtRate = {interest:n};
         }
-        // Total Debt
         if (/total debt/i.test(l)) {
           let nums = l.split(/\s+/).concat((lines[i+1]||'').split(/\s+/));
           let n = nums.map(x => parseFloat(x.replace(/,/g,''))).find(x=>!isNaN(x));
@@ -481,29 +371,24 @@ export default function DCFCalculator() {
     if(foundRiskFreeRate) setRiskFreeRate(foundRiskFreeRate);
     else setRiskFreeRate(defaultRF);
 
-    // Borç Faiz Oranı hesapla
     if(foundDebtRate.interest !== undefined && foundDebtRate.debt !== undefined) {
       setDebtRate(((Math.abs(foundDebtRate.interest)/foundDebtRate.debt)*100).toFixed(2));
     } else {
       setDebtRate("");
     }
-    // Equity Risk Premium
+    
     if(foundRiskFreeRate) setEquityRiskPremium((10-parseFloat(foundRiskFreeRate)).toFixed(2));
     else setEquityRiskPremium(defaultERP);
     
-    // Current Market Price - "Compare" satırından sonraki fiyat değerini bul
     for (let i = 0; i < lines.length; i++) {
       let l = lines[i];
       if (/^compare$/i.test(l.trim())) {
-        // Bir sonraki satırda fiyat değerini ara
         let nextLine = lines[i+1] || '';
-        // İlk sayısal değeri bul (ör: 180.26)
         let priceMatch = nextLine.match(/^(\d+\.?\d*)/);
         if (priceMatch && priceMatch[1]) {
           setCurrentMarketPrice(priceMatch[1]);
           break;
         }
-        // Eğer bir sonraki satırda bulamazsa, aynı satırda da ara
         let sameLineMatch = l.match(/(\d+\.?\d*)/);
         if (sameLineMatch && sameLineMatch[1]) {
           setCurrentMarketPrice(sameLineMatch[1]);
@@ -511,12 +396,46 @@ export default function DCFCalculator() {
         }
       }
     }
-    
+  };
+
+  const handleImport = () => {
+    processImportData(importText);
     setShowPopup(false);
-    //alert("Veriler başarıyla aktarıldı!");
   }
 
-  // Temizle fonksiyonu
+  const handleUrlImport = async () => {
+    if (!importUrl.trim()) {
+      alert("Lütfen bir URL girin!");
+      return;
+    }
+
+    setUrlLoading(true);
+    try {
+      const response = await fetch('/api/fetch-stock-data', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url: importUrl.trim() }),
+      });
+
+      const result = await response.json();
+      
+      if (result.success && result.data) {
+        processImportData(result.data);
+        setShowUrlPopup(false);
+        setImportUrl("");
+      } else {
+        alert(result.error || "Veri çekilirken bir hata oluştu. Lütfen URL'yi kontrol edin.");
+      }
+    } catch (error) {
+      console.error('Error:', error);
+      alert("Bağlantı hatası oluştu. Lütfen tekrar deneyin.");
+    } finally {
+      setUrlLoading(false);
+    }
+  };
+
   const handleClear = () => {
     setCurrentMarketPrice("");
     setFcf("");
@@ -535,7 +454,9 @@ export default function DCFCalculator() {
     setDcfResult(null);
     setBreakdown(null);
     setImportText("");
+    setImportUrl("");
     setShowPopup(false);
+    setShowUrlPopup(false);
   };
 
   return (
@@ -637,8 +558,8 @@ export default function DCFCalculator() {
   value={terminalGrowth} 
   onChange={e => setTerminalGrowth(e.target.value)} 
   placeholder="Örn: 3" 
-  max="10"  // EKLE
-  step="0.1"  // EKLE
+  max="10"
+  step="0.1"
   style={{ width: '100%', padding: '8px', marginTop: '5px', border: '1px solid #ccc', borderRadius: '4px'}}
 />      </div>
 
@@ -733,7 +654,6 @@ export default function DCFCalculator() {
       </div>
 
       <button onClick={handleCalculate} style={{ width: '100%', padding: '12px', marginTop: '10px', backgroundColor: '#0070f3', color: '#fff', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold' }}>Hesapla</button>
-      {/* Temizle butonu */}
       <button onClick={handleClear} style={{ width: '100%', padding: '12px', marginTop: '10px', backgroundColor: '#f8e731', color: '#333', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold' }}>Temizle</button>
 
       {dcfResult && (
@@ -773,6 +693,8 @@ export default function DCFCalculator() {
       )}
 
       <button onClick={() => setShowPopup(true)} style={{ marginTop: '15px', width: '100%', padding: '10px', backgroundColor: '#555', color: '#fff', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Dışarıdan Veri Aktar</button>
+      
+      <button onClick={() => setShowUrlPopup(true)} style={{ marginTop: '10px', width: '100%', padding: '10px', backgroundColor: '#28a745', color: '#fff', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Dışarıdan Veri Aktar (URL)</button>
 
       {showPopup && (
         <div style={{ position: 'fixed', top:0, left:0, width:'100%', height:'100%', background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex: 1000 }}>
@@ -792,6 +714,63 @@ Total Debt
           </div>
         </div>
       )}
+
+      {showUrlPopup && (
+        <div style={{ position: 'fixed', top:0, left:0, width:'100%', height:'100%', background:'rgba(0,0,0,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex: 1000 }}>
+          <div style={{ background:'#fff', padding:'20px', borderRadius:'8px', width:'80%', maxWidth:'500px' }}>
+            <h3>URL'den Veri Aktar</h3>
+            <p style={{ fontSize: '13px', color: '#666', marginBottom: '10px' }}>
+              Stock Analysis sitesinden hisse URL'sini girin. Örnek: https://stockanalysis.com/stocks/amzn/
+            </p>
+            <input 
+              type="text" 
+              value={importUrl} 
+              onChange={e => setImportUrl(e.target.value)} 
+              placeholder="https://stockanalysis.com/stocks/amzn/" 
+              style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '14px' }}
+              disabled={urlLoading}
+            />
+            <p style={{ fontSize: '11px', color: '#888', marginTop: '8px' }}>
+              Sistem otomatik olarak ana sayfa, /financials/, /financials/cash-flow-statement/, /financials/balance-sheet/ ve /forecast/ sayfalarından veri çekecektir.
+            </p>
+            <button 
+              onClick={handleUrlImport} 
+              disabled={urlLoading}
+              style={{ 
+                marginTop:'15px', 
+                padding:'12px', 
+                width:'100%', 
+                backgroundColor: urlLoading ? '#ccc' : '#28a745', 
+                color:'#fff', 
+                border:'none', 
+                borderRadius:'5px', 
+                cursor: urlLoading ? 'not-allowed' : 'pointer',
+                fontSize: '14px',
+                fontWeight: 'bold'
+              }}
+            >
+              {urlLoading ? 'Veriler Çekiliyor...' : 'Aktar'}
+            </button>
+            <button 
+              onClick={() => { setShowUrlPopup(false); setImportUrl(""); }} 
+              disabled={urlLoading}
+              style={{ 
+                marginTop:'10px', 
+                padding:'10px', 
+                width:'100%', 
+                backgroundColor:'#aaa', 
+                color:'#fff', 
+                border:'none', 
+                borderRadius:'5px', 
+                cursor: urlLoading ? 'not-allowed' : 'pointer' 
+              }}
+            >
+              İptal
+            </button>
+          </div>
+        </div>
+      )}
+
       {infoPopup && (
         <div style={{ position: 'fixed', top:0, left:0, width:'100%', height:'100%', background:'rgba(0,0,0,0.4)', display:'flex', alignItems:'center', justifyContent:'center', zIndex: 2000 }}>
           <div style={{ background:'#fff', padding:'24px', borderRadius:'10px', minWidth:'320px', maxWidth:'420px', boxShadow: '0 6px 24px rgba(0,0,0,0.20)' }}>
