@@ -69,6 +69,7 @@ interface ExtractedData {
   cashAndShortTermInvestments?: string[];
   effectiveTaxRate?: string[];
   interestExpense?: string[];
+  debtRate?: string;
 }
 
 function parseStockAnalysisData(results: FetchResult[]): string {
@@ -392,6 +393,17 @@ function formatOutput(data: ExtractedData): string {
   if (data.interestExpense && data.interestExpense.length > 0) {
     lines.push('Interest Expense');
     lines.push(data.interestExpense.join('\t'));
+  }
+  
+  if (data.interestExpense && data.interestExpense.length > 0 && 
+      data.totalDebt && data.totalDebt.length > 0) {
+    const interestValue = Math.abs(parseFloat(data.interestExpense[0].replace(/,/g, '')));
+    const debtValue = parseFloat(data.totalDebt[0].replace(/,/g, ''));
+    if (!isNaN(interestValue) && !isNaN(debtValue) && debtValue > 0) {
+      const debtRate = ((interestValue / debtValue) * 100).toFixed(2);
+      lines.push('Debt Interest Rate');
+      lines.push(debtRate);
+    }
   }
   
   return lines.join('\n');

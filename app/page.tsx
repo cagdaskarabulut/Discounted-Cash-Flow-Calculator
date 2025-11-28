@@ -162,7 +162,7 @@ export default function DCFCalculator() {
       beta: ["beta"].map(normalize),
       equityRiskPremium: ["equity risk premium", "özsermaye risk primi"].map(normalize),
       riskFreeRate: ["risk free rate", "risksiz faiz oranı"].map(normalize),
-      debtRate: ["debt interest rate", "debt rate", "borç faiz oranı"].map(normalize),
+      debtRate: ["debt interest rate", "debt rate", "borç faiz oranı", "interest rate on debt"].map(normalize),
       terminalGrowth: ["terminal growth rate", "terminal büyüme oranı"].map(normalize),
     };
 
